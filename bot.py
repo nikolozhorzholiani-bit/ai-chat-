@@ -79,7 +79,7 @@ async def pick_best(query: str, candidates: list[dict]) -> list[dict]:
         f"პასუხი: მხოლოდ მძიმით გამოყოფილი ნომრები, სხვა არაფერი."
     )
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         resp = await loop.run_in_executor(None, lambda: ai.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=20,
@@ -92,7 +92,7 @@ async def pick_best(query: str, candidates: list[dict]) -> list[dict]:
         return candidates[:2]
 
 
-async def ai_answer(query: str, doc: dict) -> str:
+async def ai_answer(query: str, doc: dict) -> tuple[str, str]:
     text = doc["text"][:6000]
     prompt = (
         f"სტუდენტის კითხვა: {query}\n\n"
@@ -102,16 +102,16 @@ async def ai_answer(query: str, doc: dict) -> str:
         "თუ პასუხი დოკუმენტში ზუსტად არ არის, ისე თქვი და რაც გაქვს იმის მიხედვით უპასუხე."
     )
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         resp = await loop.run_in_executor(None, lambda: ai.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=2000,
             messages=[{"role": "user", "content": prompt}]
         ))
-        return resp.content[0].text.strip()
+        return resp.content[0].text.strip(), ""
     except Exception as e:
         log.error("ai_answer error: %s", e)
-        return ""
+        return "", str(e)
 
 
 # ── Helpers ───────────────────────────────────────────────────
@@ -275,9 +275,11 @@ async def handle_question(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     # AI პასუხი პირველი (საუკეთესო) დოკუმენტის მიხედვით
-    answer = await ai_answer(query, best[0])
+    answer, err = await ai_answer(query, best[0])
     if answer:
         await update.message.reply_text(f"🤖 <b>პასუხი:</b>\n\n{answer}", parse_mode="HTML")
+    elif err:
+        await update.message.reply_text(f"⚠️ AI error: <code>{err[:300]}</code>", parse_mode="HTML")
 
     # ფაილ(ებ)ის გაგზავნა
     for doc in best:
