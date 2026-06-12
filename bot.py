@@ -93,18 +93,19 @@ async def pick_best(query: str, candidates: list[dict]) -> list[dict]:
 
 
 async def ai_answer(query: str, doc: dict) -> str:
-    text = doc["text"][:4000]
+    text = doc["text"][:6000]
     prompt = (
         f"სტუდენტის კითხვა: {query}\n\n"
         f"დოკუმენტი ({doc['filename']}):\n{text}\n\n"
-        "გასცი მოკლე, გასაგები პასუხი ქართულად ამ დოკუმენტის მიხედვით. "
+        "გასცი დეტალური, ამომწურავი პასუხი ქართულად ამ დოკუმენტის მიხედვით. "
+        "განმარტე ცნებები, მოიყვანე მაგალითები სადაც შესაძლებელია, და სტრუქტურა გამოიყენე (პუნქტები, სიები). "
         "თუ პასუხი დოკუმენტში ზუსტად არ არის, ისე თქვი და რაც გაქვს იმის მიხედვით უპასუხე."
     )
     try:
         loop = asyncio.get_event_loop()
         resp = await loop.run_in_executor(None, lambda: ai.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=600,
+            max_tokens=2000,
             messages=[{"role": "user", "content": prompt}]
         ))
         return resp.content[0].text.strip()
