@@ -177,7 +177,7 @@ async def cmd_subjects(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("სუბიექტები არ არის მითითებული.")
         return
 
-    btns = [[InlineKeyboardButton(f"📖 {s}", callback_data=f"subj:{s}")] for s in subjects]
+    btns = [[InlineKeyboardButton(f"📖 {s}", callback_data=f"subj:{i}")] for i, s in enumerate(subjects)]
     if no_subj:
         btns.append([InlineKeyboardButton(f"📂 სხვა ({len(no_subj)})", callback_data="subj:__other__")])
 
@@ -193,20 +193,24 @@ async def handle_subject_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not is_allowed(query.from_user.id):
         return
 
-    subject = query.data.split(":", 1)[1]
+    raw = query.data.split(":", 1)[1]
 
-    if subject == "__back__":
+    if raw == "__back__":
         subjects = sorted({d["subject"] for d in INDEX if d.get("subject")})
         no_subj  = [d for d in INDEX if not d.get("subject")]
-        btns = [[InlineKeyboardButton(f"📖 {s}", callback_data=f"subj:{s}")] for s in subjects]
+        btns = [[InlineKeyboardButton(f"📖 {s}", callback_data=f"subj:{i}")] for i, s in enumerate(subjects)]
         if no_subj:
             btns.append([InlineKeyboardButton(f"📂 სხვა ({len(no_subj)})", callback_data="subj:__other__")])
         await query.edit_message_text("📚 აირჩიე სუბიექტი:", reply_markup=InlineKeyboardMarkup(btns))
         return
 
-    if subject == "__other__":
+    subjects = sorted({d["subject"] for d in INDEX if d.get("subject")})
+    if raw == "__other__":
+        subject = "__other__"
         docs = [d for d in INDEX if not d.get("subject")]
     else:
+        idx = int(raw) if raw.isdigit() else -1
+        subject = subjects[idx] if 0 <= idx < len(subjects) else ""
         docs = [d for d in INDEX if d.get("subject") == subject]
 
     if not docs:
@@ -219,7 +223,7 @@ async def handle_subject_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ]
     btns.append([InlineKeyboardButton("⬅️ უკან", callback_data="subj:__back__")])
 
-    title = subject if subject != "__other__" else "სხვა"
+    title = subject if subject not in ("__other__", "") else "სხვა"
     await query.edit_message_text(
         f"📖 <b>{title}</b> — {len(docs)} ფაილი:",
         reply_markup=InlineKeyboardMarkup(btns),
