@@ -1,7 +1,7 @@
 """
 University Material Bot
 - Admin: ფაილებს ტვირთავს (მხოლოდ ADMIN_IDS)
-- სტუდენტი: კითხვას წერს → AI პასუხი + ფაილი
+- სტუდენტი: კითხვას წერს → AI პასუხი + ფაილი (multi-turn memory)
 """
 
 import os, json, logging, re, asyncio
@@ -33,6 +33,14 @@ FILES_DIR.mkdir(exist_ok=True)
 
 ai = AsyncAnthropic(api_key=ANTHRO_KEY)
 
+SYSTEM_PROMPT = (
+    "შენ ხარ GAU-ს (საქართველოს ავიაციის უნივერსიტეტი) სასწავლო ასისტენტი. "
+    "სტუდენტებს ეხმარები სასწავლო მასალების გაგებაში. "
+    "პასუხი ყოველთვის ქართულად. "
+    "გასცი დეტალური, ამომწურავი პასუხი — განმარტე ცნებები, მოიყვანე მაგალითები. "
+    "გამოიყენე წინა საუბრის კონტექსტი follow-up კითხვებისთვის."
+)
+
 
 # ── Index ─────────────────────────────────────────────────────
 
@@ -47,6 +55,24 @@ def save_index(docs: list[dict]):
     )
 
 INDEX: list[dict] = load_index()
+
+
+# ── Conversation memory ────────────────────────────────────────
+
+CONVERSATIONS: dict[int, list[dict]] = {}
+MAX_HISTORY = 10  # messages (5 exchanges)
+
+def get_history(uid: int) -> list[dict]:
+    return list(CONVERSATIONS.get(uid, []))
+
+def append_history(uid: int, role: str, content: str):
+    hist = CONVERSATIONS.setdefault(uid, [])
+    hist.append({"role": role, "content": content})
+    if len(hist) > MAX_HISTORY:
+        CONVERSATIONS[uid] = hist[-MAX_HISTORY:]
+
+def clear_history(uid: int):
+    CONVERSATIONS.pop(uid, None)
 
 
 # ── Search ────────────────────────────────────────────────────
@@ -92,20 +118,25 @@ async def pick_best(query: str, candidates: list[dict]) -> list[dict]:
         return candidates[:2]
 
 
-async def ai_answer(query: str, doc: dict) -> tuple[str, str]:
-    text = doc["text"][:6000]
-    prompt = (
-        f"სტუდენტის კითხვა: {query}\n\n"
-        f"დოკუმენტი ({doc['filename']}):\n{text}\n\n"
-        "გასცი დეტალური, ამომწურავი პასუხი ქართულად ამ დოკუმენტის მიხედვით. "
-        "განმარტე ცნებები, მოიყვანე მაგალითები სადაც შესაძლებელია, და სტრუქტურა გამოიყენე (პუნქტები, სიები). "
-        "თუ პასუხი დოკუმენტში ზუსტად არ არის, ისე თქვი და რაც გაქვს იმის მიხედვით უპასუხე."
-    )
+async def ai_answer(query: str, doc: dict | None, history: list[dict]) -> tuple[str, str]:
+    # Build current user message — embed doc context here, not in history
+    if doc:
+        user_msg = (
+            f"კითხვა: {query}\n\n"
+            f"[რელევანტური დოკუმენტი: {doc['filename']}]\n"
+            f"{doc['text'][:5000]}"
+        )
+    else:
+        user_msg = query
+
+    messages = history + [{"role": "user", "content": user_msg}]
+
     try:
         resp = await ai.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=2000,
-            messages=[{"role": "user", "content": prompt}]
+            system=SYSTEM_PROMPT,
+            messages=messages,
         )
         return resp.content[0].text.strip(), ""
     except Exception as e:
@@ -127,21 +158,33 @@ def is_allowed(uid: int) -> bool:
 # ── Handlers ──────────────────────────────────────────────────
 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    uid  = update.effective_user.id
+    uid = update.effective_user.id
     if not is_allowed(uid):
         await update.message.reply_text("⛔ წვდომა შეზღუდულია.")
         return
+    clear_history(uid)
     role = "👑 Admin" if is_admin(uid) else "👨‍🎓 სტუდენტი"
     n    = len(INDEX)
     text = (
         f"👋 გამარჯობა! <b>University Materials Bot</b>\n"
         f"როლი: {role} · ინდექსში: <b>{n} ფაილი</b>\n\n"
-        "დამიწერე კითხვა და AI პასუხს მოგცემს + ფაილს გამოგიგზავნის.\n\n"
+        "დამიწერე კითხვა და AI პასუხს მოგცემს + ფაილს გამოგიგზავნის.\n"
+        "შეგიძლია დასვა follow-up კითხვები — მახსოვს საუბრის კონტექსტი.\n\n"
         "/list — ხელმისაწვდომი მასალები\n"
+        "/new — საუბრის ისტორიის გასუფთავება\n"
     )
     if is_admin(uid):
         text += "/upload — ფაილის ატვირთვა\n/delete — ფაილის წაშლა"
     await update.message.reply_text(text, parse_mode="HTML")
+
+
+async def cmd_new(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not is_allowed(uid):
+        await update.message.reply_text("⛔ წვდომა შეზღუდულია.")
+        return
+    clear_history(uid)
+    await update.message.reply_text("🧹 საუბრის ისტორია გასუფთავდა. ახალი კითხვიდან დავიწყოთ!")
 
 
 async def cmd_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -159,7 +202,6 @@ async def cmd_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "<b>📚 ხელმისაწვდომი მასალები:</b>\n\n" + "\n".join(lines),
         parse_mode="HTML"
     )
-
 
 
 async def cmd_upload(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -251,7 +293,8 @@ async def handle_document(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_question(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not is_allowed(update.effective_user.id):
+    uid = update.effective_user.id
+    if not is_allowed(uid):
         await update.message.reply_text("⛔ წვდომა შეზღუდულია.")
         return
     query = (update.message.text or "").strip()
@@ -262,39 +305,41 @@ async def handle_question(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📭 მასალები ჯერ არ არის ატვირთული. მოგვიანებით სცადე.")
         return
 
-    msg = await update.message.reply_text("🔍 ვეძებ…")
+    msg = await update.message.reply_text("🔍 ვფიქრობ…")
 
+    history    = get_history(uid)
     candidates = find_relevant(query, top_n=3)
     best       = await pick_best(query, candidates)
+    top_doc    = best[0] if best else None
 
     await msg.delete()
 
-    if not best:
-        await update.message.reply_text("😔 ამ თემაზე მასალა ვერ ვიპოვე.\n/list — ნახე რა გვაქვს.")
-        return
+    answer, err = await ai_answer(query, top_doc, history)
 
-    # AI პასუხი პირველი (საუკეთესო) დოკუმენტის მიხედვით
-    answer, err = await ai_answer(query, best[0])
     if answer:
         await update.message.reply_text(f"🤖 <b>პასუხი:</b>\n\n{answer}", parse_mode="HTML")
+        # Save clean Q&A to history (without doc text)
+        append_history(uid, "user", query)
+        append_history(uid, "assistant", answer)
     elif err:
         await update.message.reply_text(f"⚠️ AI error: <code>{err[:300]}</code>", parse_mode="HTML")
 
-    # ფაილ(ებ)ის გაგზავნა
-    for doc in best:
-        fp = FILES_DIR / doc["filename"]
-        if not fp.exists():
-            await update.message.reply_text(f"⚠️ ფაილი ვერ მოიძებნა: {doc['filename']}")
-            continue
-        subj    = f" · {doc['subject']}" if doc.get("subject") else ""
-        caption = f"📄 <b>{doc['filename']}</b>{subj}"
-        with open(fp, "rb") as f:
-            await update.message.reply_document(
-                document=f,
-                filename=doc["filename"],
-                caption=caption,
-                parse_mode="HTML"
-            )
+    # Send files
+    if best:
+        for doc in best:
+            fp = FILES_DIR / doc["filename"]
+            if not fp.exists():
+                await update.message.reply_text(f"⚠️ ფაილი ვერ მოიძებნა: {doc['filename']}")
+                continue
+            subj    = f" · {doc['subject']}" if doc.get("subject") else ""
+            caption = f"📄 <b>{doc['filename']}</b>{subj}"
+            with open(fp, "rb") as f:
+                await update.message.reply_document(
+                    document=f,
+                    filename=doc["filename"],
+                    caption=caption,
+                    parse_mode="HTML"
+                )
 
 
 # ── Error handler ─────────────────────────────────────────────
@@ -320,10 +365,11 @@ def main():
     log.info("📚 University Bot — %d docs in index, admins: %s", len(INDEX), ADMIN_IDS)
 
     app = Application.builder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start",    cmd_start))
-    app.add_handler(CommandHandler("list",     cmd_list))
-    app.add_handler(CommandHandler("upload",   cmd_upload))
-    app.add_handler(CommandHandler("delete",   cmd_delete))
+    app.add_handler(CommandHandler("start",  cmd_start))
+    app.add_handler(CommandHandler("new",    cmd_new))
+    app.add_handler(CommandHandler("list",   cmd_list))
+    app.add_handler(CommandHandler("upload", cmd_upload))
+    app.add_handler(CommandHandler("delete", cmd_delete))
     app.add_handler(CallbackQueryHandler(handle_delete_cb, pattern="^del:"))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_question))
