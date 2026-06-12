@@ -1,7 +1,7 @@
 """
 University Material Bot
 - Admin: ფაილებს ტვირთავს (მხოლოდ ADMIN_IDS)
-- სტუდენტი: კითხვას წერს → AI პასუხი + ფაილი; ან /subjects მენიუთი დათვალიერება
+- სტუდენტი: კითხვას წერს → AI პასუხი + ფაილი
 """
 
 import os, json, logging, asyncio, re
@@ -137,8 +137,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"👋 გამარჯობა! <b>University Materials Bot</b>\n"
         f"როლი: {role} · ინდექსში: <b>{n} ფაილი</b>\n\n"
         "დამიწერე კითხვა და AI პასუხს მოგცემს + ფაილს გამოგიგზავნის.\n\n"
-        "/subjects — მასალები სუბიექტების მიხედვით\n"
-        "/list — ყველა მასალა\n"
+        "/list — ხელმისაწვდომი მასალები\n"
     )
     if is_admin(uid):
         text += "/upload — ფაილის ატვირთვა\n/delete — ფაილის წაშლა"
@@ -161,102 +160,6 @@ async def cmd_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         parse_mode="HTML"
     )
 
-
-async def cmd_subjects(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not is_allowed(update.effective_user.id):
-        await update.message.reply_text("⛔ წვდომა შეზღუდულია.")
-        return
-    if not INDEX:
-        await update.message.reply_text("📭 მასალები ჯერ არ არის ატვირთული.")
-        return
-
-    subjects = sorted({d["subject"] for d in INDEX if d.get("subject")})
-    no_subj  = [d for d in INDEX if not d.get("subject")]
-
-    if not subjects and not no_subj:
-        await update.message.reply_text("სუბიექტები არ არის მითითებული.")
-        return
-
-    btns = [[InlineKeyboardButton(f"📖 {s}", callback_data=f"subj:{i}")] for i, s in enumerate(subjects)]
-    if no_subj:
-        btns.append([InlineKeyboardButton(f"📂 სხვა ({len(no_subj)})", callback_data="subj:__other__")])
-
-    await update.message.reply_text(
-        "📚 აირჩიე სუბიექტი:",
-        reply_markup=InlineKeyboardMarkup(btns)
-    )
-
-
-async def handle_subject_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    if not is_allowed(query.from_user.id):
-        return
-
-    raw = query.data.split(":", 1)[1]
-
-    if raw == "__back__":
-        subjects = sorted({d["subject"] for d in INDEX if d.get("subject")})
-        no_subj  = [d for d in INDEX if not d.get("subject")]
-        btns = [[InlineKeyboardButton(f"📖 {s}", callback_data=f"subj:{i}")] for i, s in enumerate(subjects)]
-        if no_subj:
-            btns.append([InlineKeyboardButton(f"📂 სხვა ({len(no_subj)})", callback_data="subj:__other__")])
-        await query.edit_message_text("📚 აირჩიე სუბიექტი:", reply_markup=InlineKeyboardMarkup(btns))
-        return
-
-    subjects = sorted({d["subject"] for d in INDEX if d.get("subject")})
-    if raw == "__other__":
-        subject = "__other__"
-        docs = [d for d in INDEX if not d.get("subject")]
-    else:
-        idx = int(raw) if raw.isdigit() else -1
-        subject = subjects[idx] if 0 <= idx < len(subjects) else ""
-        docs = [d for d in INDEX if d.get("subject") == subject]
-
-    if not docs:
-        await query.edit_message_text("ამ სუბიექტში ფაილი არ არის.")
-        return
-
-    btns = [
-        [InlineKeyboardButton(f"📄 {d['filename']}", callback_data=f"file:{d['id']}")]
-        for d in docs
-    ]
-    btns.append([InlineKeyboardButton("⬅️ უკან", callback_data="subj:__back__")])
-
-    title = subject if subject not in ("__other__", "") else "სხვა"
-    await query.edit_message_text(
-        f"📖 <b>{title}</b> — {len(docs)} ფაილი:",
-        reply_markup=InlineKeyboardMarkup(btns),
-        parse_mode="HTML"
-    )
-
-
-async def handle_file_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    if not is_allowed(query.from_user.id):
-        return
-
-    doc_id = query.data.split(":", 1)[1]
-    doc    = next((d for d in INDEX if d["id"] == doc_id), None)
-    if not doc:
-        await query.edit_message_text("⚠️ ფაილი ვერ მოიძებნა.")
-        return
-
-    fp = FILES_DIR / doc["filename"]
-    if not fp.exists():
-        await query.edit_message_text(f"⚠️ ფაილი სერვერზე ვერ მოიძებნა: {doc['filename']}")
-        return
-
-    subj    = f" · {doc['subject']}" if doc.get("subject") else ""
-    caption = f"📄 <b>{doc['filename']}</b>{subj}"
-    with open(fp, "rb") as f:
-        await query.message.reply_document(
-            document=f,
-            filename=doc["filename"],
-            caption=caption,
-            parse_mode="HTML"
-        )
 
 
 async def cmd_upload(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -407,12 +310,9 @@ def main():
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start",    cmd_start))
     app.add_handler(CommandHandler("list",     cmd_list))
-    app.add_handler(CommandHandler("subjects", cmd_subjects))
     app.add_handler(CommandHandler("upload",   cmd_upload))
     app.add_handler(CommandHandler("delete",   cmd_delete))
-    app.add_handler(CallbackQueryHandler(handle_delete_cb,  pattern="^del:"))
-    app.add_handler(CallbackQueryHandler(handle_subject_cb, pattern="^subj:"))
-    app.add_handler(CallbackQueryHandler(handle_file_cb,    pattern="^file:"))
+    app.add_handler(CallbackQueryHandler(handle_delete_cb, pattern="^del:"))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_question))
 
