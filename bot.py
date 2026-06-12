@@ -4,9 +4,9 @@ University Material Bot
 - სტუდენტი: კითხვას წერს → AI პასუხი + ფაილი
 """
 
-import os, json, logging, asyncio, re
+import os, json, logging, re
 from pathlib import Path
-from anthropic import Anthropic
+from anthropic import AsyncAnthropic
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -30,7 +30,7 @@ INDEX_FILE = DATA_DIR / "index.json"
 DATA_DIR.mkdir(exist_ok=True)
 FILES_DIR.mkdir(exist_ok=True)
 
-ai = Anthropic(api_key=ANTHRO_KEY)
+ai = AsyncAnthropic(api_key=ANTHRO_KEY)
 
 
 # ── Index ─────────────────────────────────────────────────────
@@ -79,12 +79,11 @@ async def pick_best(query: str, candidates: list[dict]) -> list[dict]:
         f"პასუხი: მხოლოდ მძიმით გამოყოფილი ნომრები, სხვა არაფერი."
     )
     try:
-        loop = asyncio.get_running_loop()
-        resp = await loop.run_in_executor(None, lambda: ai.messages.create(
+        resp = await ai.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=20,
             messages=[{"role": "user", "content": prompt}]
-        ))
+        )
         nums = [int(x.strip()) for x in resp.content[0].text.split(",") if x.strip().isdigit()]
         picked = [candidates[n-1] for n in nums if 1 <= n <= len(candidates)]
         return picked if picked else candidates[:2]
@@ -102,12 +101,11 @@ async def ai_answer(query: str, doc: dict) -> tuple[str, str]:
         "თუ პასუხი დოკუმენტში ზუსტად არ არის, ისე თქვი და რაც გაქვს იმის მიხედვით უპასუხე."
     )
     try:
-        loop = asyncio.get_running_loop()
-        resp = await loop.run_in_executor(None, lambda: ai.messages.create(
+        resp = await ai.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=2000,
             messages=[{"role": "user", "content": prompt}]
-        ))
+        )
         return resp.content[0].text.strip(), ""
     except Exception as e:
         log.error("ai_answer error: %s", e)
