@@ -4,11 +4,12 @@ University Material Bot
 - სტუდენტი: კითხვას წერს → AI პასუხი + ფაილი
 """
 
-import os, json, logging, re
+import os, json, logging, re, asyncio
 from pathlib import Path
 from anthropic import AsyncAnthropic
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import Conflict
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     CallbackQueryHandler, ContextTypes, filters
@@ -296,6 +297,16 @@ async def handle_question(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             )
 
 
+# ── Error handler ─────────────────────────────────────────────
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    if isinstance(context.error, Conflict):
+        log.warning("409 Conflict — ძველი instance ჯერ მუშაობს, 10 წამი ველოდები…")
+        await asyncio.sleep(10)
+    else:
+        log.error("Unhandled error: %s", context.error, exc_info=True)
+
+
 # ── Main ──────────────────────────────────────────────────────
 
 def main():
@@ -316,6 +327,7 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_delete_cb, pattern="^del:"))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_question))
+    app.add_error_handler(error_handler)
 
     app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
